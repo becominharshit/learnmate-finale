@@ -1,0 +1,939 @@
+# LEARNMATE 2.0 — COMPLETE FULL-STACK PRODUCT UPGRADE
+
+You are a Principal Google AI Architect, Senior Full-Stack Engineer, React/TypeScript Expert, Firebase Security Engineer, Educational Product Designer, and QA Automation Specialist.
+
+## MISSION
+
+Upgrade my EXISTING LearnMate application into **LearnMate 2.0**, a scalable, intelligent, mobile-friendly educational platform.
+
+Implement ALL requirements in this single development request.
+
+Do not stop after producing an architecture plan. Inspect the existing source code, implement the requested features, integrate them, fix errors, and run available tests.
+
+You may internally organize dependencies and implementation work, but do not require me to submit separate feature prompts or approvals.
+
+### CRITICAL PRESERVATION RULES
+
+- DO NOT rebuild the application from scratch.
+- Preserve all existing working features.
+- Preserve student accounts, Firebase records, uploaded materials, quizzes, study progress, revision plans, and conversations.
+- Preserve the existing Google-inspired visual identity.
+- Preserve the working Gemini Live Voice Tutor and its current UI. Optimize performance without unnecessarily rewriting microphone/audio logic.
+- Do not replace working functionality with mock data.
+- Do not introduce fictional API responses, educational content, or user statistics.
+- Never expose API keys or service credentials in frontend code.
+- Inspect the real implementation and adapt to existing component names, routes, data schemas, and services.
+
+### EXISTING FEATURES TO PRESERVE
+
+PDF/text/YouTube ingestion, context-aware Gemini tutoring, source citations, voice tutoring and avatar, diagnostic quizzes, Mistake DNA, adaptive practice, revision plans, sticky notes, flashcards, mind maps, one-page revision, study timer, Focus Mode, YouTube recommendations, Firebase Authentication, Firestore persistence, progress analytics, exports, and light/dark themes.
+
+Do not remove anything merely because it is not mentioned elsewhere.
+
+---
+
+# 1. GLOBAL UI/UX REDESIGN
+
+Create a premium, minimalist, Google-inspired learning experience.
+
+### Design system
+
+Google colors:
+- Blue #4285F4
+- Red #EA4335
+- Yellow #FBBC05
+- Green #34A853
+
+Primary text: #172033
+Secondary text: #64748B
+Light background: #FBFCFF
+
+Use:
+- DM Sans for primary UI and educational reading.
+- Kalam only for handwritten-style notes.
+- Smoothly blended Google-color gradients.
+- Generous whitespace.
+- Subtle shadows.
+- Rounded cards.
+- Clear typography and readable content.
+- Minimal, purposeful animations.
+- Consistent loading, empty, success and error states.
+- Accessible contrast, keyboard focus and touch targets.
+
+Avoid clutter, unnecessary feature descriptions, crowded navigation, excessive gradients, or decorative distractions.
+
+Retain Light, Dark and System themes.
+
+## New navigation architecture
+
+Create these major experiences:
+
+1. Home
+2. Learn
+3. Practice
+4. Create
+5. Explore
+
+Provide Focus Mode and personal Library through contextual controls without crowding the main navigation.
+
+Keep the student's personalized dashboard accessible from Home or Learn.
+
+Do not delete or break existing routes. Adapt them to the updated navigation structure.
+
+### Homepage
+
+The homepage should contain:
+
+- LearnMate branding.
+- A clean personalized greeting.
+- Main headline: "What will you learn today?"
+- Continue Learning.
+- Upload PDF / Paste Notes / YouTube URL.
+- Scan Notes.
+- Record Voice Note.
+- Browse Courses.
+- Four compact workspace destinations: Learn, Practice, Create, Explore.
+- Recently opened materials.
+- Floating study timer.
+- Profile, search and notifications.
+
+Use progressive disclosure: show advanced features when relevant, not all at once.
+
+### Mobile-first responsiveness
+
+Support phones, tablets and desktops.
+
+Mobile:
+- Compact bottom navigation.
+- Touch-friendly buttons.
+- Responsive learning panels.
+- No horizontal whole-page overflow.
+- Proper keyboard handling.
+- Camera access where supported.
+- Full-height responsive dialogs.
+- Responsive flashcards, quizzes, charts, PDF readers, and 3D views.
+
+Use responsive CSS and appropriate component layouts, not a scaled-down desktop screenshot.
+
+Support PWA/offline capabilities where practical for previously saved learning content.
+
+---
+
+# 2. UNIFIED SOURCE-AWARE AI LEARNING ENGINE
+
+Refactor or extend existing Gemini services into a reusable learning engine.
+
+Support:
+- PDFs
+- Pasted text
+- YouTube videos
+- Scanned notes
+- Recorded audio
+- Uploaded images
+- Course Library content
+
+Normalize analyzed content into reusable topics, definitions, concepts, relationships, formulas, and source references.
+
+Cache source analysis and reuse it across learning features.
+
+### Strict source-control mode
+
+Add a prominent but compact setting in the Study interface:
+
+**Material Only | Extended Knowledge**
+
+Default: Material Only.
+
+Material Only:
+- Answers must be supported by selected uploaded material.
+- Cite valid source pages, sections or timestamps.
+- If information is unavailable, state that it isn't covered.
+- Do not silently supplement missing details with general knowledge.
+- Do not automatically search the internet.
+
+Extended Knowledge:
+- Allow Gemini general knowledge.
+- Clearly distinguish uploaded-source evidence from external knowledge.
+- Allow Google Search grounding only when explicitly enabled.
+- Show real citations for externally retrieved claims.
+
+Never fabricate source references.
+
+Use structured outputs, schema validation, source matching, and post-generation verification for important educational statements.
+
+Correct factual errors where possible and display uncertainty when verification fails.
+
+Use deterministic grading for objective questions.
+
+For educational diagrams and generated interactive simulations, validate mathematical and scientific rules rather than relying solely on visually plausible AI output.
+
+---
+
+# 3. SPEED AND BACKEND OPTIMIZATION
+
+Improve frontend/backend responsiveness and reduce unnecessary AI calls.
+
+Implement or improve:
+
+- Centralized server-side Gemini request management.
+- Task-based model selection using actually supported models.
+- Streaming text when supported.
+- Source analysis caching.
+- In-flight request deduplication.
+- Controlled concurrency.
+- On-demand AI generation.
+- Persistent asynchronous generation jobs for long-running media tasks where supported.
+- Loading progress based on genuine completed stages.
+- Bounded retries for transient errors.
+- Correct handling of 403, 429, timeouts and quota exhaustion.
+- Lazy loading for 3D, video, images and other large UI modules.
+- Optimized React rendering.
+- Firestore query optimization.
+- Secure per-user cache partitioning.
+- Background job cancellation/status recovery where supported.
+
+Measure actual latency and API usage.
+
+Do not claim speed improvements without benchmarks.
+
+Do not change to a more expensive paid model without reporting the billing implications.
+
+---
+
+# 4. FIREBASE AUTHENTICATION AND USER ISOLATION
+
+Support both guest learning and permanent student accounts.
+
+### Guest Mode
+
+Use Firebase Anonymous Authentication when configured.
+
+Each guest receives a unique UID and a private workspace.
+
+Guest progress, notes and resources must belong to that account.
+
+### Permanent Account
+
+Allow Google Sign-In and appropriate account creation.
+
+Link an anonymous account to permanent credentials when supported, preserving the existing UID and study history.
+
+Handle cases where the Google account already exists safely.
+
+Never merge or overwrite another user's records without explicit authorization.
+
+### Firestore
+
+Use UID-scoped documents, e.g.:
+
+users/{uid}/materials
+users/{uid}/progress
+users/{uid}/quizzes
+users/{uid}/notes
+users/{uid}/generatedAssets
+users/{uid}/games
+users/{uid}/studySessions
+users/{uid}/conversations
+
+Adapt this to the current schema without losing existing data.
+
+Use owner-scoped Cloud Storage paths.
+
+Secure all client Firestore rules and server endpoints.
+
+Verify Firebase ID tokens server-side and derive identity from verified tokens.
+
+React immediately to sign-in/sign-out changes.
+
+Clear previous-user private state and subscriptions after account switching.
+
+Never use one shared guest identity for every visitor.
+
+---
+
+# 5. LEARNMATE CREATIVE STUDIO
+
+Create a dedicated "Create" workspace containing:
+
+- Learning Games
+- Concept 3D Lab
+- Mini App Builder
+- Visualize Concept
+- AI Video Lessons
+
+Use an organized card-based interface with one active creation tool at a time.
+
+## A. AI Learning Games
+
+Allow students to select:
+- Study source
+- Topic
+- Difficulty
+- 2D or supported 3D game format
+
+Create interactive educational mini-games such as:
+- Equation puzzles
+- Concept matching
+- Circuit-building activities
+- Interactive physics challenges
+- Drag-and-drop labeling
+- Chemistry or biology quizzes
+- Spatial geometry activities
+
+Use validated game templates and AI-generated content.
+
+Support scores, replay, hints, and learning feedback.
+
+Use appropriate lightweight 2D rendering and Three.js for suitable 3D experiences.
+
+Do NOT execute unrestricted model-generated JavaScript inside LearnMate's main application.
+
+If custom code is needed, execute it only in a securely isolated, permission-limited environment with no access to parent app secrets, Firebase credentials, or private user information.
+
+Save created games to the student's Library.
+
+## B. Concept 3D Lab
+
+Let students explore suitable study concepts using interactive 3D models.
+
+Support:
+- Rotate
+- Zoom
+- Pan
+- Labels
+- Show/hide layers
+- Exploded views when applicable
+- Concept explanations
+
+Start with validated templates for:
+- Molecules
+- Cells
+- Geometry
+- Physical forces
+- Circuits
+- Mathematical solids
+- Educational structures
+
+Use Three.js.
+
+Generate scene parameters and educational annotations from source-grounded concepts.
+
+Never pretend an arbitrary AI-generated 3D scene is scientifically accurate without validation.
+
+Provide a clear explanation when a requested subject cannot be accurately represented as a 3D model.
+
+## C. Mini App Builder
+
+Allow students to create simple personal learning web apps, such as:
+- Formula calculators
+- Quiz boards
+- Revision planners
+- Vocabulary trainers
+- Progress widgets
+- Study organizers
+
+Use safe declarative schemas or sandboxed templates rather than executing unrestricted user-generated code in the main app.
+
+Allow customization, preview, editing and saving.
+
+Keep each student's creations private unless they explicitly share them.
+
+Provide export/share options when technically supported.
+
+## D. Visualize Concept
+
+Integrate a supported Nano Banana image-generation model.
+
+Students select a concept from their source and create:
+- Educational illustrations
+- Concept diagrams
+- Visual comparisons
+- Infographics
+- Scene-based explanations
+
+Use source-grounded prompts.
+
+Preserve generated images in their Library.
+
+Label generated visuals as AI-generated.
+
+Validate or flag precise formulas, labels and scientific relationships if the image model cannot guarantee correctness.
+
+## E. AI Video Lessons
+
+Integrate a supported Gemini Omni Flash video-generation model.
+
+Let students convert selected educational topics into short concept-visualization clips.
+
+Workflow:
+Topic → Grounded script → Verified explanation → Video generation → Playback.
+
+Use real asynchronous generation status and saved assets.
+
+Allow appropriate short durations within the model's actual supported limits.
+
+Do not promise arbitrary long-form videos.
+
+Provide a text-based explanation when video generation is unavailable or too expensive.
+
+---
+
+# 6. LO-FI FOCUS RADIO
+
+Create a beautiful instrumental lo-fi music experience.
+
+Use an available Lyria music-generation model.
+
+This feature belongs primarily inside Focus Mode.
+
+Provide presets such as:
+- Rainy Night Study
+- Warm Vinyl Beats
+- Soft Piano Lo-fi
+- Cozy Library
+- Ambient Jazz-Hop
+- Deep Focus
+
+Strict UI rule:
+Instrumental lo-fi only. No lyric-entry UI, singing modes or vocal presets.
+
+Generation prompts must request instrumental-only music without singing or spoken words.
+
+Where possible, check the result for unintended vocals and offer regeneration.
+
+Students can:
+- Generate
+- Play/pause
+- Loop
+- Adjust volume
+- Save tracks
+- Reuse previously generated music
+
+Use cached tracks rather than generating fresh music every session.
+
+Audio must not automatically start without the relevant user interaction.
+
+---
+
+# 7. FOCUS MODE + FLOATING TIMER
+
+Preserve the existing timer and improve its usability.
+
+Create a floating, Apple Dynamic Island-inspired timer pill inside LearnMate.
+
+Features:
+- Visible across LearnMate routes.
+- Expand/collapse.
+- Draggable on desktop where practical.
+- Compact on mobile.
+- Pomodoro and custom durations.
+- Start/pause/reset.
+- Session history.
+- Nonintrusive notifications.
+- Integrated lo-fi audio controls.
+
+The timer must never cover essential controls.
+
+### Focus Mode
+
+Implement an optional distraction-reduced fullscreen study experience.
+
+Use the browser Fullscreen API through a user gesture.
+
+Hide unnecessary app navigation and distractions.
+
+If students exit fullscreen or switch tabs:
+- Detect supported visibility/fullscreen events.
+- Show a gentle return-to-focus reminder.
+- Optionally record interruptions with clear consent.
+
+Do not claim the web app can prevent users from opening other tabs, switching applications, or leaving fullscreen.
+
+Always provide an obvious Exit Focus control.
+
+---
+
+# 8. CAMERA SCANNING & DIGITAL HANDWRITTEN NOTES
+
+Create "Scan Notes" on the homepage and in My Notebook.
+
+Support:
+- Mobile camera capture.
+- Image file upload.
+- Multiple-page scanning.
+- Crop, rotate and perspective correction.
+- Image enhancement.
+- Original image preview.
+
+Use Gemini multimodal understanding or an appropriate OCR service to extract content.
+
+Create editable digital notes that preserve, where practical:
+- Headings
+- Paragraphs
+- Lists
+- Formulas
+- Tables
+- Page order
+- Important highlighted content
+
+Offer two editing presentations:
+1. Clean digital notes.
+2. Handwritten-style notes using a readable handwriting font.
+
+Do not pretend typed font text preserves the student's exact handwriting.
+
+Display original image beside the editable output.
+
+Allow users to correct transcription errors.
+
+Support autosave, manual save, and export.
+
+Keep original images linked to edited versions.
+
+Handle unreadable handwriting honestly by flagging uncertain sections.
+
+---
+
+# 9. PERSONAL NOTEBOOK AND AUDIO TRANSCRIPTION
+
+Create "My Notebook".
+
+Students can save:
+- Typed notes
+- Scanned photos
+- Handwritten-style notes
+- Audio recordings
+- Lecture transcripts
+- AI-generated diagrams
+- Saved learning resources
+
+### Audio recording
+Use secure browser microphone access.
+
+Provide:
+- Record
+- Pause
+- Stop
+- Replay
+- Rename
+- Delete
+- Save
+
+Require permission and user consent.
+
+### Transcription
+
+Use a supported transcription model for uploaded or recorded audio.
+
+For live transcription, use an actually supported streaming transcription service or existing Live API capabilities.
+
+Offer:
+- Live readable transcript where supported.
+- Editable text.
+- Speaker labels and timestamps when available.
+- Summarize lecture.
+- Convert into notes.
+- Generate flashcards/quiz from transcript.
+
+Never label delayed file transcription as genuinely live transcription.
+
+Preserve audio and transcript securely under the authenticated UID.
+
+---
+
+# 10. LEARNMATE DAILY — CURRENT AFFAIRS NEWSPAPER
+
+Create a newspaper-inspired current-affairs reading section inside Explore.
+
+Use Google Search Grounding or verified retrieval sources.
+
+Show:
+- Largest major story at the top.
+- Headline
+- Publication
+- Date
+- Summary
+- Source link
+- Relevant category
+
+Categories:
+- World
+- India
+- Technology
+- Science
+- Economy
+- Education
+- Environment
+- Competitive Exam Current Affairs
+
+Keep the design editorial, clean, and readable.
+
+Allow filtering by topic.
+
+Show source attribution and distinguish publication time from event time.
+
+Support a daily refresh, with scheduled updates when supported by the deployed backend.
+
+Deduplicate repeated stories.
+
+Clearly show the latest successful update time.
+
+Generate optional exam-style current-affairs questions using verified story facts.
+
+Never invent headlines, sources or publication dates.
+
+Respect source licenses and avoid copying whole articles.
+
+---
+
+# 11. EDUCATIONAL MAPS
+
+Create an optional "Learning Around Me" experience.
+
+Use a supported Google Maps / Places / Maps Grounding integration.
+
+With explicit location permission or a manually entered city, suggest:
+- Libraries
+- Museums
+- Science centers
+- Historical sites
+- Educational exhibitions
+- Relevant cultural attractions
+
+Let students explore places related to subjects they are studying.
+
+Examples:
+- History → Nearby historical landmarks.
+- Science → Museums or science centers.
+- Geography → Real mapped locations.
+
+Show grounded place details, map links and educational relevance.
+
+Do not fabricate business details or locations.
+
+Location access must be optional and never continuously collected by default.
+
+---
+
+# 12. EXAM PREPARATION PLATFORM
+
+Build a full-featured Practice workspace.
+
+Support:
+- Diagnostic quizzes.
+- Adaptive practice.
+- Custom question counts.
+- Topic selection.
+- Difficulty selection.
+- Timed practice.
+- Review mode.
+- Mock exams.
+
+Students can choose the number of questions, including common presets and custom supported values.
+
+Validate against available source content, question quality, and API limits.
+
+### Exam Simulator
+
+Create a JEE-style mock-examination mode, alongside configurable generic exam layouts.
+
+Features:
+- Fullscreen exam interface.
+- Countdown timer.
+- Question palette.
+- Mark for review.
+- Next/Previous.
+- Save answer.
+- Submit examination.
+- Optional negative marking.
+- Customizable instructions.
+- Exit confirmation.
+- Fullscreen-exit warnings.
+- Autosaved answers.
+- Reliable recovery after refresh/disconnection.
+- Detailed final results.
+
+Do not claim affiliation with official JEE organizers.
+
+Use properly licensed or original questions.
+
+If fullscreen is exited, warn the student but do not claim to physically restrict tab or application switching.
+
+Save results under the correct student account.
+
+Connect exam performance to Mistake DNA and adaptive revision.
+
+---
+
+# 13. READY-MADE COURSE LIBRARY
+
+Create a Course Library accessible from Home and Explore.
+
+Students can browse by:
+- School subjects
+- Class/grade
+- College subject
+- Programming
+- Mathematics
+- Science
+- Competitive exam
+- Skill category
+
+Start with a small but useful catalog of original or appropriately licensed resources.
+
+Each course includes:
+- Description
+- Learning objectives
+- Modules
+- Lessons
+- Suggested practice
+- Progress tracking
+
+Use the same AI tutor, quiz, flashcard and revision engine for these materials.
+
+Never generate an entire unsupported course catalog with fabricated source materials or copyrighted textbook copies.
+
+Separate platform-curated materials from user-uploaded content.
+
+Allow enrolled students to continue courses without needing to upload their own documents.
+
+---
+
+# 14. COMPACT STUDY UTILITIES
+
+Build a small draggable/collapsible Tools widget accessible during study.
+
+Include:
+- Scientific calculator
+- Unit converter
+- Formula sheet
+- Quick scratchpad
+- Simple graphing tool when supported
+- Stopwatch
+- Basic percentage/statistics calculator
+
+Use deterministic calculations.
+
+Do not use Gemini for ordinary arithmetic.
+
+Keep the widget compact, responsive, and easy to dismiss.
+
+Preserve the student's current Study context.
+
+---
+
+# 15. NOTIFICATIONS — FIX EXISTING BUG
+
+The notification icon currently fails to open the panel.
+
+Inspect its actual click handler, state and overlay positioning.
+
+Fix the root cause.
+
+Create a working notification panel for:
+- Revision reminders
+- Study goals
+- Completed background AI jobs
+- Saved resources
+- Relevant course updates
+- System messages
+
+Allow mark-as-read and clear actions.
+
+Persist meaningful notifications under the correct user.
+
+Do not generate fake notifications.
+
+Browser push notifications must be optional and permission-based.
+
+---
+
+# 16. ADDITIONAL LEARNING FEATURES
+
+Implement these approved enhancements:
+
+### Spaced Repetition
+Schedule flashcard review using a simple evidence-based spaced repetition algorithm, with due dates based on review history.
+
+### Teach It Back
+Students explain a concept through text or voice; Gemini evaluates coverage against source-grounded key points and suggests missing ideas.
+
+### Study Planner
+Generate realistic schedules based on subjects, exams, available time and weak topics.
+
+### Mistake History
+Track recurring misconceptions and whether subsequent practice resolves them.
+
+### Offline Library
+Cache eligible previously saved resources for offline reading when technically supported, without compromising account privacy.
+
+### Accessibility
+Adjust text size, reading width, contrast, captions and reduced motion. Ensure keyboard and screen-reader usability.
+
+### AI Usage Dashboard
+Show request counts, feature usage and available measured consumption data. Use server-side budget/quota safeguards.
+
+### Shareable Study Packs
+Allow explicit sharing of selected notes, flashcards or study resources using secure access controls.
+
+Do not make private records public by default.
+
+---
+
+# 17. SHARED BACKEND AND DATA ARCHITECTURE
+
+Keep one coherent application architecture.
+
+Frontend:
+React + TypeScript + current styling system.
+
+Backend:
+Reuse existing Node.js/server framework and validated APIs.
+
+AI:
+Google GenAI SDK and task-specific models.
+
+Data:
+Firebase Authentication, Cloud Firestore and Cloud Storage as appropriate.
+
+### Reusable backend services
+
+Create or refactor only where needed:
+
+- AuthService
+- MaterialService
+- AIOrchestrator
+- LearningContentService
+- QuizService
+- RevisionService
+- CreativeMediaService
+- GameService
+- CourseService
+- NewsService
+- TranscriptionService
+- NotificationService
+- StorageService
+
+Do not add empty architecture layers just to match these names. Reuse existing services and functions.
+
+Use typed data contracts.
+
+Centralize model configuration and availability checks.
+
+Store generated images, videos, music and recordings appropriately in private cloud storage.
+
+Separate educational metadata from large media binaries.
+
+Provide user-scoped Firestore security rules.
+
+Use stable IDs for materials, sessions, generated resources and background jobs.
+
+Track costs, errors and job statuses.
+
+Add guards against excessive generation requests.
+
+---
+
+# 18. COMPLETE APPLICATION TESTING
+
+After implementing all changes, run available verification.
+
+### Frontend
+- TypeScript
+- Build
+- Routing
+- Responsive layouts
+- Mobile viewport testing
+- Accessibility
+- Loading/error states
+- Dark/light themes
+
+### Authentication
+- Guest user
+- New permanent user
+- Guest account upgrade
+- Logout/login
+- Account switching
+- Firestore isolation
+- Storage isolation
+- Session restoration
+
+### Learning
+- PDF processing
+- Source-grounded tutor
+- External-knowledge opt-in
+- Quiz grading
+- Revision resources
+- Course Library
+- Custom question counts
+- Exam simulation
+
+### Creative tools
+- 2D learning game
+- 3D learning model
+- Mini-app preview
+- Image generation
+- Video generation
+- Instrumental lo-fi generation
+
+### Input
+- Camera capture
+- Photo digitization
+- Editable notes
+- Audio recording
+- Transcription
+
+### Productivity
+- Focus timer
+- Fullscreen exit
+- Music playback
+- Notifications
+- Calculator
+
+### Information services
+- Real current-affairs story with source
+- News refresh
+- Educational Maps result
+- Correct permission handling
+
+### Reliability
+- API 403
+- API 429
+- Network failure
+- Invalid model output
+- Firebase permission errors
+- Background job recovery
+- Data persistence
+- No cross-user data leakage
+
+Use mocked external API responses for deterministic tests and real integration smoke tests when credentials and quota allow.
+
+Do not mark a feature tested merely because code was generated.
+
+## REQUIRED FINAL REPORT
+
+After execution provide:
+
+1. Features completed.
+2. Files/components modified.
+3. Firebase schema and security changes.
+4. Google AI models actually used.
+5. API services enabled or requiring configuration.
+6. Tests executed and their results.
+7. Features blocked by quota, billing, permissions or unsupported APIs.
+8. Remaining bugs and security concerns.
+9. Actual performance measurements where available.
+
+Any unavailable integration must have an accurate disabled/unconfigured state—not a fake success response.
+
+Do not silently omit requested features.
+
+## FINAL PRODUCT GOAL
+
+Deliver **LearnMate 2.0**, a polished, mobile-first, scalable AI education platform combining personalized learning, exam preparation, creative learning games, interactive 3D visualization, AI images/videos, instrumental focus music, editable scanned notes, lecture transcription, current affairs, courses, secure accounts and progress tracking.
+
+The experience must remain simple even though the platform contains many capabilities.
+
+**One application. One connected learning experience. All approved capabilities.**
+
+Inspect the existing codebase and begin implementing the complete upgrade now.

@@ -1,0 +1,90 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated student profile and active study state metadata.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "activeDocumentId": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "updatedAt"]
+    },
+    "StudyDocumentRecord": {
+      "title": "StudyDocumentRecord",
+      "description": "Uploaded PDF or pasted study material with extracted page-indexed content and topics.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "title": { "type": "string" },
+        "sourceType": { "type": "string", "enum": ["pdf", "text", "youtube", "scanned_notes", "voice_note", "course"] },
+        "youtubeUrl": { "type": "string" },
+        "videoId": { "type": "string" },
+        "pageCount": { "type": "integer" },
+        "pagesJson": { "type": "string" },
+        "topicsJson": { "type": "string" },
+        "overview": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastStudiedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "title", "sourceType", "pageCount", "pagesJson", "topicsJson", "overview", "createdAt", "lastStudiedAt"]
+    },
+    "QuizAttemptRecord": {
+      "title": "QuizAttemptRecord",
+      "description": "Completed diagnostic, adaptive, or JEE simulator quiz attempt with score and topic breakdown.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "documentId": { "type": "string" },
+        "documentTitle": { "type": "string" },
+        "mode": { "type": "string", "enum": ["diagnostic", "adaptive", "jee_simulator"] },
+        "score": { "type": "integer" },
+        "totalQuestions": { "type": "integer" },
+        "percentage": { "type": "integer" },
+        "attemptJson": { "type": "string" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "documentId", "documentTitle", "mode", "score", "totalQuestions", "percentage", "attemptJson", "completedAt"]
+    },
+    "DocumentStudyState": {
+      "title": "DocumentStudyState",
+      "description": "Per-document tutor chat history, mistake insights, revision plan, cached quiz questions, and quick revise bundle.",
+      "type": "object",
+      "properties": {
+        "documentId": { "type": "string" },
+        "uid": { "type": "string" },
+        "tutorMessagesJson": { "type": "string" },
+        "mistakesJson": { "type": "string" },
+        "revisionPlanJson": { "type": "string" },
+        "cachedQuizJson": { "type": "string" },
+        "quickReviseJson": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["documentId", "uid", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile and active document preference."
+    },
+    "/users/{userId}/documents/{docId}": {
+      "schema": { "$ref": "#/entities/StudyDocumentRecord" },
+      "description": "User-scoped study materials."
+    },
+    "/users/{userId}/attempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/QuizAttemptRecord" },
+      "description": "User-scoped quiz attempts and scores."
+    },
+    "/users/{userId}/studyState/{docId}": {
+      "schema": { "$ref": "#/entities/DocumentStudyState" },
+      "description": "User-scoped tutor conversations, Mistake DNA, and revision plans."
+    }
+  }
+}

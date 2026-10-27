@@ -1,0 +1,94 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'updatedAt']) &&
+             data.uid is string && data.uid == userId &&
+             data.updatedAt is string && data.updatedAt.size() <= 64 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 320)) &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 160)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 2048)) &&
+             (!('activeDocumentId' in data) || (data.activeDocumentId is string && data.activeDocumentId.size() <= 160));
+    }
+
+    function isValidStudyDocument(data, userId) {
+      return data.keys().hasAll(['id', 'uid', 'title', 'sourceType', 'pageCount', 'pagesJson', 'topicsJson', 'overview', 'createdAt', 'lastStudiedAt']) &&
+             data.uid is string && data.uid == userId &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 160 &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 300 &&
+             data.sourceType in ['pdf', 'text', 'youtube', 'scanned_notes', 'voice_note', 'course'] &&
+             (!('youtubeUrl' in data) || (data.youtubeUrl is string && data.youtubeUrl.size() <= 1024)) &&
+             (!('videoId' in data) || (data.videoId is string && data.videoId.size() <= 64)) &&
+             data.pageCount is int && data.pageCount >= 1 && data.pageCount <= 50 &&
+             data.pagesJson is string && data.pagesJson.size() <= 900000 &&
+             data.topicsJson is string && data.topicsJson.size() <= 200000 &&
+             data.overview is string && data.overview.size() <= 10000 &&
+             data.createdAt is string && data.createdAt.size() <= 64 &&
+             data.lastStudiedAt is string && data.lastStudiedAt.size() <= 64;
+    }
+
+    function isValidQuizAttempt(data, userId) {
+      return data.keys().hasAll(['id', 'uid', 'documentId', 'documentTitle', 'mode', 'score', 'totalQuestions', 'percentage', 'attemptJson', 'completedAt']) &&
+             data.uid is string && data.uid == userId &&
+             data.id is string && data.id.size() > 0 && data.id.size() <= 160 &&
+             data.documentId is string && data.documentId.size() > 0 && data.documentId.size() <= 160 &&
+             data.documentTitle is string && data.documentTitle.size() <= 300 &&
+             data.mode in ['diagnostic', 'adaptive', 'jee_simulator'] &&
+             data.score is int && data.score >= 0 && data.score <= 100 &&
+             data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 100 &&
+             data.percentage is int && data.percentage >= 0 && data.percentage <= 100 &&
+             data.attemptJson is string && data.attemptJson.size() <= 500000 &&
+             data.completedAt is string && data.completedAt.size() <= 64;
+    }
+
+    function isValidStudyState(data, userId) {
+      return data.keys().hasAll(['documentId', 'uid', 'updatedAt']) &&
+             data.uid is string && data.uid == userId &&
+             data.documentId is string && data.documentId.size() > 0 && data.documentId.size() <= 160 &&
+             data.updatedAt is string && data.updatedAt.size() <= 64 &&
+             (!('tutorMessagesJson' in data) || (data.tutorMessagesJson is string && data.tutorMessagesJson.size() <= 600000)) &&
+             (!('mistakesJson' in data) || (data.mistakesJson is string && data.mistakesJson.size() <= 300000)) &&
+             (!('revisionPlanJson' in data) || (data.revisionPlanJson is string && data.revisionPlanJson.size() <= 300000)) &&
+             (!('cachedQuizJson' in data) || (data.cachedQuizJson is string && data.cachedQuizJson.size() <= 300000)) &&
+             (!('quickReviseJson' in data) || (data.quickReviseJson is string && data.quickReviseJson.size() <= 500000));
+    }
+
+    // ===============================================================
+    // User Scoped Collections
+    // ===============================================================
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidUserProfile(request.resource.data, userId);
+      allow delete: if isOwner(userId);
+
+      match /documents/{docId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidStudyDocument(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+
+      match /attempts/{attemptId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidQuizAttempt(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+
+      match /studyState/{docId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidStudyState(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

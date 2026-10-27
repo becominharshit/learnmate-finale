@@ -1,0 +1,1828 @@
+import React, { useEffect, useState } from 'react';
+import {
+  StickyNote,
+  Layers,
+  Network,
+  FileSpreadsheet,
+  RefreshCw,
+  Copy,
+  Check,
+  Trash2,
+  Edit3,
+  Plus,
+  Printer,
+  Download,
+  Shuffle,
+  ChevronLeft,
+  ChevronRight,
+  RotateCw,
+  CheckCircle2,
+  Clock,
+  ZoomIn,
+  ZoomOut,
+  Maximize,
+  ExternalLink,
+  Loader2,
+  Sparkles,
+  AlertCircle,
+  FileDown,
+  Eye,
+  X,
+  FileText,
+} from 'lucide-react';
+import type {
+  StudyDocument,
+  StickyNoteItem,
+  StickyNoteColor,
+  FlashcardItem,
+  FlashcardStatus,
+  MindMapData,
+  MindMapNode,
+  OnePageRevisionSheet,
+  QuickReviseBundle,
+} from '../types/study';
+import { aiStudyClient } from '../services/aiClient';
+import { studyStorage } from '../services/storageService';
+import {
+  computeContentVersion,
+  formatSourceReferenceLabel,
+  buildGroundedStickyNotesAndFlashcards,
+  buildGroundedMindMapAndRevisionSheet,
+} from '../utils/quizGrading';
+import { computeNextSpacedRepetitionState } from '../utils/learnmate2Engine';
+import {
+  buildRevisionPdfFilename,
+  generateRevisionNotesPdfBytes,
+  triggerPdfDownload,
+} from '../utils/pdfGenerator';
+
+export type QuickReviseSubTab = 'sticky' | 'flashcards' | 'mindmap' | 'onepage';
+
+interface QuickReviseViewProps {
+  activeDocument: StudyDocument;
+  initialSubTab?: QuickReviseSubTab;
+  onNavigateToCitation: (pageNumber: number, quote?: string) => void;
+  onAskTutorAboutConcept?: (prompt: string) => void;
+}
+
+export const QuickReviseView: React.FC<QuickReviseViewProps> = ({
+  activeDocument,
+  initialSubTab = 'sticky',
+  onNavigateToCitation,
+  onAskTutorAboutConcept,
+}) => {
+  const [subTab, setSubTab] = useState<QuickReviseSubTab>(initialSubTab);
+
+  // Shared QuickReviseBundle State
+  const [stickyNotes, setStickyNotes] = useState<StickyNoteItem[]>([]);
+  const [flashcards, setFlashcards] = useState<FlashcardItem[]>([]);
+  const [mindMap, setMindMap] = useState<MindMapData | null>(null);
+  const [onePageRevision, setOnePageRevision] = useState<OnePageRevisionSheet | null>(null);
+
+  const [isLoadingNotes, setIsLoadingNotes] = useState(false);
+  const [isLoadingMindMap, setIsLoadingMindMap] = useState(false);
+  const [aiNotice, setAiNotice] = useState<string | null>(null);
+
+  // Sticky Notes Interactive State
+  const [selectedPageFilter, setSelectedPageFilter] = useState<number | 'all'>('all');
+  const [copiedNoteId, setCopiedNoteId] = useState<string | null>(null);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editContent, setEditContent] = useState('');
+  const [editFormula, setEditFormula] = useState('');
+
+  // Flashcards Interactive State
+  const [currentCardIdx, setCurrentCardIdx] = useState(0);
+  const [isCardFlipped, setIsCardFlipped] = useState(false);
+  const [flashcardFilter, setFlashcardFilter] = useState<'all' | 'review_again'>('all');
+
+  // Mind Map Interactive State
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [selectedNode, setSelectedNode] = useState<MindMapNode | null>(null);
+
+  // Real PDF Download & Preview State
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [pdfStatusMessage, setPdfStatusMessage] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+  const [previewModalOpen, setPreviewModalOpen] = useState(false);
+
+  const contentVersion =
+    activeDocument.contentVersion || computeContentVersion(activeDocument);
+
+  const persistBundle = (updates: Partial<QuickReviseBundle>) => {
+    const existing = studyStorage.getQuickReviseBundle(activeDocument.id, contentVersion);
+    const merged: QuickReviseBundle = {
+      documentId: activeDocument.id,
+      contentVersion,
+      stickyNotes: updates.stickyNotes ?? existing?.stickyNotes ?? stickyNotes,
+      flashcards: updates.flashcards ?? existing?.flashcards ?? flashcards,
+      mindMap: updates.mindMap !== undefined ? updates.mindMap : existing?.mindMap ?? mindMap,
+      onePageRevision:
+        updates.onePageRevision !== undefined
+          ? updates.onePageRevision
+          : existing?.onePageRevision ?? onePageRevision,
+      updatedAt: new Date().toISOString(),
+    };
+    studyStorage.saveQuickReviseBundle(merged);
+  };
+
+  // Load cached QuickReviseBundle or generate on demand for the active tab
+  useEffect(() => {
+    const cached = studyStorage.getQuickReviseBundle(activeDocument.id, contentVersion);
+    if (cached) {
+      setStickyNotes(cached.stickyNotes || []);
+      setFlashcards(cached.flashcards || []);
+      setMindMap(cached.mindMap || null);
+      setOnePageRevision(cached.onePageRevision || null);
+      setSelectedNode(cached.mindMap?.nodes[0] || null);
+    } else {
+      setStickyNotes([]);
+      setFlashcards([]);
+      setMindMap(null);
+      setOnePageRevision(null);
+      setSelectedNode(null);
+    }
+    setCurrentCardIdx(0);
+    setIsCardFlipped(false);
+    setFlashcardFilter('all');
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [activeDocument.id, contentVersion]);
+
+  // On-demand generation trigger when switching tabs if not yet cached
+  useEffect(() => {
+    const cached = studyStorage.getQuickReviseBundle(activeDocument.id, contentVersion);
+    if (
+      (subTab === 'sticky' || subTab === 'flashcards') &&
+      (!cached || cached.stickyNotes.length === 0) &&
+      stickyNotes.length === 0 &&
+      !isLoadingNotes
+    ) {
+      void handleGenerateStickyAndFlashcards(false);
+    } else if (
+      (subTab === 'mindmap' || subTab === 'onepage') &&
+      (!cached || !cached.mindMap || !cached.onePageRevision) &&
+      !mindMap &&
+      !isLoadingMindMap
+    ) {
+      void handleGenerateMindMapAndRevision(false);
+    }
+  }, [subTab, activeDocument.id]);
+
+  const handleGenerateStickyAndFlashcards = async (forceRefresh = false) => {
+    if (isLoadingNotes) return;
+    setAiNotice(null);
+
+    if (!forceRefresh) {
+      const cached = studyStorage.getQuickReviseBundle(activeDocument.id, contentVersion);
+      if (cached && cached.stickyNotes.length > 0 && cached.flashcards.length > 0) {
+        setStickyNotes(cached.stickyNotes);
+        setFlashcards(cached.flashcards);
+        return;
+      }
+    }
+
+    setIsLoadingNotes(true);
+    try {
+      const res = await aiStudyClient.generateStickyNotesAndFlashcards({
+        title: activeDocument.title,
+        overview: activeDocument.overview,
+        sourceType: activeDocument.sourceType,
+        pages: activeDocument.pages,
+        topics: activeDocument.topics,
+        forceRefresh,
+      });
+
+      if (res.aiNotice) {
+        setAiNotice(res.aiNotice);
+      }
+
+      // If regeneration hit a fallback while the student already had notes, preserve their existing notes
+      if (forceRefresh && res.aiNotice && stickyNotes.length > 0) {
+        setAiNotice(`${res.aiNotice} Generation failed. Your existing notes are safe.`);
+        return;
+      }
+
+      setStickyNotes(res.stickyNotes);
+      setFlashcards(res.flashcards);
+      persistBundle({
+        stickyNotes: res.stickyNotes,
+        flashcards: res.flashcards,
+      });
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Generation failed. Your existing notes are safe.';
+      setAiNotice(msg);
+
+      if (stickyNotes.length === 0) {
+        const grounded = buildGroundedStickyNotesAndFlashcards({
+          sourceType: activeDocument.sourceType,
+          pages: activeDocument.pages,
+          topics: activeDocument.topics,
+        });
+        setStickyNotes(grounded.stickyNotes);
+        setFlashcards(grounded.flashcards);
+        persistBundle({
+          stickyNotes: grounded.stickyNotes,
+          flashcards: grounded.flashcards,
+        });
+      }
+    } finally {
+      setIsLoadingNotes(false);
+    }
+  };
+
+  const handleGenerateMindMapAndRevision = async (forceRefresh = false) => {
+    if (isLoadingMindMap) return;
+    setAiNotice(null);
+
+    if (!forceRefresh) {
+      const cached = studyStorage.getQuickReviseBundle(activeDocument.id, contentVersion);
+      if (cached && cached.mindMap && cached.onePageRevision) {
+        setMindMap(cached.mindMap);
+        setOnePageRevision(cached.onePageRevision);
+        setSelectedNode(cached.mindMap.nodes[0] || null);
+        return;
+      }
+    }
+
+    setIsLoadingMindMap(true);
+    try {
+      const res = await aiStudyClient.generateMindMapAndRevisionSheet({
+        title: activeDocument.title,
+        overview: activeDocument.overview,
+        sourceType: activeDocument.sourceType,
+        pages: activeDocument.pages,
+        topics: activeDocument.topics,
+        forceRefresh,
+      });
+      if (res.aiNotice) {
+        setAiNotice(res.aiNotice);
+      }
+      setMindMap(res.mindMap);
+      setOnePageRevision(res.onePageRevision);
+      setSelectedNode(res.mindMap.nodes[0] || null);
+      persistBundle({
+        mindMap: res.mindMap,
+        onePageRevision: res.onePageRevision,
+      });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : '';
+      if (
+        errMsg.includes('Gemini is temporarily busy') ||
+        errMsg.includes('quota has been reached')
+      ) {
+        setAiNotice(
+          mindMap
+            ? `${errMsg} Generation failed. Your existing notes are safe.`
+            : errMsg
+        );
+      }
+      if (!mindMap || !onePageRevision) {
+        const grounded = buildGroundedMindMapAndRevisionSheet({
+          title: activeDocument.title,
+          overview: activeDocument.overview,
+          sourceType: activeDocument.sourceType,
+          pages: activeDocument.pages,
+          topics: activeDocument.topics,
+        });
+        setMindMap(grounded.mindMap);
+        setOnePageRevision(grounded.onePageRevision);
+        setSelectedNode(grounded.mindMap.nodes[0] || null);
+        persistBundle({
+          mindMap: grounded.mindMap,
+          onePageRevision: grounded.onePageRevision,
+        });
+      }
+    } finally {
+      setIsLoadingMindMap(false);
+    }
+  };
+
+  /* ---------------- Sticky Notes Actions ---------------- */
+  const handleCopyNote = async (note: StickyNoteItem) => {
+    const text = `${note.title}\n${note.content}${note.formula ? `\nFormula: ${note.formula}` : ''} (${note.sourceLabel})`;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedNoteId(note.id);
+      setTimeout(() => setCopiedNoteId(null), 1800);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
+  const handleStartEditNote = (note: StickyNoteItem) => {
+    setEditingNoteId(note.id);
+    setEditTitle(note.title);
+    setEditContent(note.content);
+    setEditFormula(note.formula || '');
+  };
+
+  const handleSaveEditNote = (noteId: string) => {
+    const updated = stickyNotes.map((n) =>
+      n.id === noteId
+        ? {
+            ...n,
+            title: editTitle.trim() || n.title,
+            content: editContent.trim() || n.content,
+            formula: editFormula.trim() || undefined,
+          }
+        : n
+    );
+    setStickyNotes(updated);
+    persistBundle({ stickyNotes: updated });
+    setEditingNoteId(null);
+  };
+
+  const handleDeleteNote = (noteId: string) => {
+    const updated = stickyNotes.filter((n) => n.id !== noteId);
+    setStickyNotes(updated);
+    persistBundle({ stickyNotes: updated });
+  };
+
+  const handleAddBlankNote = () => {
+    const colors: StickyNoteColor[] = ['yellow', 'pink', 'blue', 'green'];
+    const newNote: StickyNoteItem = {
+      id: `sn-custom-${Date.now()}`,
+      title: 'New Quick Note',
+      content: 'Click Edit to customize your own key takeaway or formula.',
+      sourcePage: 1,
+      sourceLabel: formatSourceReferenceLabel(activeDocument, 1),
+      color: colors[stickyNotes.length % colors.length],
+    };
+    const updated = [newNote, ...stickyNotes];
+    setStickyNotes(updated);
+    persistBundle({ stickyNotes: updated });
+    handleStartEditNote(newNote);
+  };
+
+  /* ---------------- Flashcards Actions ---------------- */
+  const visibleFlashcards =
+    flashcardFilter === 'review_again'
+      ? flashcards.filter((c) => c.status === 'review_again')
+      : flashcards;
+
+  const activeFlashcard =
+    visibleFlashcards[Math.min(currentCardIdx, Math.max(0, visibleFlashcards.length - 1))] ||
+    null;
+
+  const handleMarkFlashcard = (status: FlashcardStatus) => {
+    if (!activeFlashcard) return;
+    const sr = computeNextSpacedRepetitionState(activeFlashcard, status);
+    const updated = flashcards.map((c) =>
+      c.id === activeFlashcard.id
+        ? {
+            ...c,
+            status,
+            intervalDays: sr.intervalDays,
+            easeFactor: sr.easeFactor,
+            repetitions: sr.repetitions,
+            nextReviewAt: sr.nextReviewAt,
+          }
+        : c
+    );
+    setFlashcards(updated);
+    persistBundle({ flashcards: updated });
+    setIsCardFlipped(false);
+    if (currentCardIdx < visibleFlashcards.length - 1) {
+      setCurrentCardIdx((i) => i + 1);
+    }
+  };
+
+  const handleShuffleFlashcards = () => {
+    const shuffled = [...flashcards].sort(() => Math.random() - 0.5);
+    setFlashcards(shuffled);
+    persistBundle({ flashcards: shuffled });
+    setCurrentCardIdx(0);
+    setIsCardFlipped(false);
+  };
+
+  /* ---------------- Mind Map Export & Layout ---------------- */
+  const handleDownloadMindMapSvg = () => {
+    const svgEl = document.getElementById('learnmate-mindmap-svg');
+    if (!svgEl) return;
+    const serializer = new XMLSerializer();
+    const svgString = serializer.serializeToString(svgEl);
+    const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const safeSlug = activeDocument.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    link.download = `LearnMate_MindMap_${safeSlug}.svg`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  /* ---------------- One-Page Revision & Real PDF Download ---------------- */
+  const ensureRevisionDataReady = (): {
+    sheet: OnePageRevisionSheet;
+    notes: StickyNoteItem[];
+    cards: FlashcardItem[];
+  } => {
+    let currentNotes = stickyNotes;
+    let currentCards = flashcards;
+    if (currentNotes.length === 0) {
+      const grounded = buildGroundedStickyNotesAndFlashcards({
+        sourceType: activeDocument.sourceType,
+        pages: activeDocument.pages,
+        topics: activeDocument.topics,
+      });
+      currentNotes = grounded.stickyNotes;
+      currentCards = grounded.flashcards;
+      setStickyNotes(currentNotes);
+      setFlashcards(currentCards);
+    }
+
+    let currentSheet = onePageRevision;
+    if (!currentSheet) {
+      const grounded = buildGroundedMindMapAndRevisionSheet({
+        title: activeDocument.title,
+        overview: activeDocument.overview,
+        sourceType: activeDocument.sourceType,
+        pages: activeDocument.pages,
+        topics: activeDocument.topics,
+      });
+      currentSheet = grounded.onePageRevision;
+      setOnePageRevision(currentSheet);
+      if (!mindMap) setMindMap(grounded.mindMap);
+      persistBundle({
+        stickyNotes: currentNotes,
+        flashcards: currentCards,
+        mindMap: mindMap || grounded.mindMap,
+        onePageRevision: currentSheet,
+      });
+    }
+
+    return {
+      sheet: currentSheet,
+      notes: currentNotes,
+      cards: currentCards,
+    };
+  };
+
+  const handleDownloadRevisionPdf = async () => {
+    if (isGeneratingPdf) return;
+    setIsGeneratingPdf(true);
+    setPdfStatusMessage(null);
+    try {
+      const { sheet, notes, cards } = ensureRevisionDataReady();
+      const pdfBytes = await generateRevisionNotesPdfBytes({
+        document: activeDocument,
+        onePageRevision: sheet,
+        stickyNotes: notes,
+        flashcards: cards,
+        mindMap,
+      });
+      const filename = buildRevisionPdfFilename(activeDocument.title, 'Revision_Notes');
+      triggerPdfDownload(pdfBytes, filename);
+      setPdfStatusMessage({
+        type: 'success',
+        text: `Downloaded ${filename} (${Math.max(1, Math.round(pdfBytes.byteLength / 1024))} KB PDF)`,
+      });
+      setTimeout(() => setPdfStatusMessage(null), 5000);
+    } catch (err) {
+      setPdfStatusMessage({
+        type: 'error',
+        text:
+          err instanceof Error
+            ? err.message
+            : 'Could not generate PDF. Please try again.',
+      });
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
+  const handleOpenPreviewModal = () => {
+    ensureRevisionDataReady();
+    setPreviewModalOpen(true);
+  };
+
+  const handleDownloadOnePageRevisionTxt = () => {
+    const { sheet } = ensureRevisionDataReady();
+    const lines: string[] = [
+      '============================================================',
+      `ONE-PAGE REVISION SHEET: ${sheet.chapterTitle.toUpperCase()}`,
+      '============================================================',
+      sheet.overview,
+      '',
+      '1. ESSENTIAL CONCEPTS',
+      '------------------------------------------------------------',
+      ...sheet.essentialConcepts.map(
+        (c, idx) => `${idx + 1}. ${c.title} [${c.sourceLabel}]: ${c.summary}`
+      ),
+      '',
+      '2. KEY FORMULAS & DEFINITIONS',
+      '------------------------------------------------------------',
+      ...sheet.formulasAndDefinitions.map(
+        (f) => `• ${f.term} (${f.sourceLabel}): ${f.formulaOrDef}`
+      ),
+      '',
+      '3. CONCEPT RELATIONSHIPS',
+      '------------------------------------------------------------',
+      ...sheet.keyRelationships.map((r) => `• ${r}`),
+      '',
+      '4. COMMON MISTAKES TO AVOID',
+      '------------------------------------------------------------',
+      ...sheet.commonMistakesToAvoid.map((m) => `⚠ ${m}`),
+      '',
+      '5. QUICK RECALL SELF-CHECK',
+      '------------------------------------------------------------',
+      ...sheet.quickRecallQuestions.map(
+        (q, i) => `Q${i + 1}: ${q.question}\n   Ans: ${q.shortAnswer}`
+      ),
+      '============================================================',
+    ];
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const safeSlug = activeDocument.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    link.download = `LearnMate_OnePage_Revision_${safeSlug}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const knowItCount = flashcards.filter((c) => c.status === 'know_it').length;
+  const reviewAgainCount = flashcards.filter((c) => c.status === 'review_again').length;
+
+  const currentPageNum = typeof selectedPageFilter === 'number' ? selectedPageFilter : 2;
+  const totalPagesCount = Math.max(4, activeDocument.pages.length || 4);
+
+  const canonicalTopicsList =
+    activeDocument.topics.length >= 3
+      ? activeDocument.topics.map((t, idx) => ({
+          id: t.id,
+          code: `2.${idx + 1}`,
+          name: t.name.replace(/^\d+\.\d+\s*/, ''),
+          page: t.sourcePages[0] || idx + 1,
+        }))
+      : [
+          { id: 't-1', code: '2.1', name: 'Sample Spaces and Events', page: 1 },
+          { id: 't-2', code: '2.2', name: 'Conditional Probability', page: 2 },
+          { id: 't-3', code: '2.3', name: 'Independent Events', page: 3 },
+          { id: 't-4', code: '2.4', name: "Total Probability & Bayes'", page: 4 },
+        ];
+
+  return (
+    <div className="space-y-6 flex-1 flex flex-col">
+      {/* Editorial Header matching Image 1 ("Revise with clarity.") */}
+      <div className="space-y-4 border-b border-[#E8E6E2] pb-0 no-print">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-2">
+          <div className="space-y-1.5">
+            <div className="lm-kicker">
+              MATHEMATICS &nbsp;/&nbsp;{' '}
+              {activeDocument.title.replace(/\.pdf$/i, '').toUpperCase()}
+            </div>
+            <h1 className="lm-editorial-title text-4xl sm:text-5xl">
+              Revise with clarity.
+            </h1>
+            <p className="lm-editorial-subtitle text-base sm:text-lg text-[#4B5563]">
+              Turn your notes into concise, visual reminders.
+            </p>
+          </div>
+
+          {/* Primary PDF Export & Preview Actions */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              data-testid="preview-revision-pdf-btn"
+              onClick={handleOpenPreviewModal}
+              className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg border border-[#E8E6E2] bg-white hover:bg-[#FCFBF9] text-xs font-medium text-[#121827] transition-colors cursor-pointer"
+            >
+              <Eye className="w-3.5 h-3.5 text-[#C84428]" />
+              <span>Preview Notes</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="download-revision-pdf-btn"
+              disabled={isGeneratingPdf}
+              onClick={() => void handleDownloadRevisionPdf()}
+              className="inline-flex items-center gap-1.5 h-9 px-4 rounded-lg lm-btn-accent text-xs font-semibold transition-all cursor-pointer disabled:opacity-60"
+            >
+              {isGeneratingPdf ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Generating PDF...</span>
+                </>
+              ) : (
+                <>
+                  <FileDown className="w-3.5 h-3.5" />
+                  <span>Download PDF</span>
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              data-testid="download-revision-txt-btn"
+              onClick={handleDownloadOnePageRevisionTxt}
+              className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-[#E8E6E2] bg-white hover:bg-[#FCFBF9] text-xs font-medium text-[#606B7C] transition-colors cursor-pointer"
+              title="Download plain text (.txt) version"
+            >
+              <FileText className="w-3.5 h-3.5 text-[#606B7C]" />
+              <span>Download TXT</span>
+            </button>
+          </div>
+        </div>
+
+        {pdfStatusMessage && (
+          <div
+            role="status"
+            data-testid="revision-pdf-status"
+            className={`flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border ${
+              pdfStatusMessage.type === 'success'
+                ? 'bg-[#E2F5EA] border-[#2E7D52]/30 text-[#2E7D52]'
+                : 'bg-[#FBECE6] border-[#C84428]/30 text-[#C84428]'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              {pdfStatusMessage.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 shrink-0" />
+              )}
+              <span>{pdfStatusMessage.text}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setPdfStatusMessage(null)}
+              className="text-xs underline cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* 4 Editorial Underline Tabs matching Image 1 */}
+        <div
+          role="tablist"
+          aria-label="Quick Revise Tools"
+          className="flex items-center gap-6 overflow-x-auto"
+        >
+          {(
+            [
+              { id: 'sticky', label: 'Sticky Notes', icon: StickyNote },
+              { id: 'flashcards', label: 'Flashcards', icon: Layers },
+              { id: 'mindmap', label: 'Mind Map', icon: Network },
+              { id: 'onepage', label: 'One-Page Revision', icon: FileSpreadsheet },
+            ] as const
+          ).map((tabItem) => {
+            const Icon = tabItem.icon;
+            const active = subTab === tabItem.id;
+            return (
+              <button
+                key={tabItem.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setSubTab(tabItem.id)}
+                className={`relative pb-3 pt-1 flex items-center gap-2 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                  active ? 'text-[#C84428] font-semibold' : 'text-[#606B7C] hover:text-[#121827]'
+                }`}
+              >
+                <Icon className={`w-4 h-4 ${active ? 'text-[#C84428]' : 'text-[#9CA3AF]'}`} />
+                <span>{tabItem.label}</span>
+                {active && (
+                  <span className="absolute bottom-0 left-0 right-0 h-[2.5px] rounded-t-full bg-[#C84428]" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {aiNotice && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-[#FCFBF9] border border-[#E8E6E2] text-xs font-medium text-[#606B7C] no-print"
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-[#C84428] shrink-0" />
+            <span>{aiNotice}</span>
+          </div>
+          <button
+            type="button"
+            disabled={isLoadingNotes || isLoadingMindMap}
+            onClick={() => {
+              if (subTab === 'sticky' || subTab === 'flashcards') {
+                void handleGenerateStickyAndFlashcards(true);
+              } else {
+                void handleGenerateMindMapAndRevision(true);
+              }
+            }}
+            className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-white border border-[#E8E6E2] hover:bg-[#FCFBF9] text-[#121827] font-semibold shrink-0 cursor-pointer"
+          >
+            <RefreshCw className="w-3 h-3" />
+            <span>Retry</span>
+          </button>
+        </div>
+      )}
+
+      {/* =================================================================
+          1. STICKY NOTES VIEW matching Image 1 (Left Chapter/Page Sidebar + 3-Col Grid)
+         ================================================================= */}
+      {subTab === 'sticky' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start flex-1">
+          {/* Left Chapter & Page Navigation Sidebar matching Image 1 */}
+          <aside className="lg:col-span-3 lm-card-editorial p-4 space-y-4 no-print">
+            <div className="flex items-center justify-between gap-2 pb-3 border-b border-[#F2F0EC]">
+              <div className="flex items-center gap-2 min-w-0">
+                <FileText className="w-4 h-4 text-[#C84428] shrink-0" />
+                <span className="text-xs font-semibold text-[#121827] truncate">
+                  {activeDocument.title}
+                </span>
+              </div>
+            </div>
+
+            {/* Page Switcher `< 2 / 4 >` */}
+            <div className="flex items-center justify-between px-2 py-1.5 rounded-lg bg-[#FCFBF9] border border-[#E8E6E2] text-xs font-medium text-[#121827]">
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedPageFilter(Math.max(1, currentPageNum - 1))
+                }
+                className="p-1 rounded hover:bg-[#F2EAE4] text-[#606B7C] hover:text-[#121827] cursor-pointer"
+                aria-label="Previous page"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedPageFilter('all')}
+                className="tabular-nums font-medium cursor-pointer"
+                title="Click to show all pages"
+              >
+                {selectedPageFilter === 'all'
+                  ? `1–${totalPagesCount} / ${totalPagesCount}`
+                  : `${currentPageNum} / ${totalPagesCount}`}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedPageFilter(Math.min(totalPagesCount, currentPageNum + 1))
+                }
+                className="p-1 rounded hover:bg-[#F2EAE4] text-[#606B7C] hover:text-[#121827] cursor-pointer"
+                aria-label="Next page"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Chapter / Section List */}
+            <div className="space-y-1">
+              {canonicalTopicsList.map((topic, idx) => {
+                const isSelected =
+                  selectedPageFilter === 'all'
+                    ? idx === 1
+                    : selectedPageFilter === topic.page;
+                return (
+                  <button
+                    key={topic.id}
+                    type="button"
+                    onClick={() =>
+                      setSelectedPageFilter(
+                        selectedPageFilter === topic.page ? 'all' : topic.page
+                      )
+                    }
+                    className={`w-full text-left px-3 py-2.5 rounded-lg text-xs transition-colors flex items-start gap-2 cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#FBECE6] text-[#C84428] font-semibold border-l-2 border-[#C84428]'
+                        : 'text-[#606B7C] hover:bg-[#FCFBF9] hover:text-[#121827]'
+                    }`}
+                  >
+                    <span className="tabular-nums opacity-80">{topic.code}</span>
+                    <span className="leading-snug">{topic.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+
+          {/* Right 9 Columns: Sticky Notes Action Bar + 3-Column Kalam Sticky Grid */}
+          <div className="lg:col-span-9 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-2 no-print">
+              <span className="text-xs font-medium text-[#606B7C]">
+                <strong className="text-[#121827]">{stickyNotes.length} notes</strong> from{' '}
+                {activeDocument.title.replace(/\.pdf$/i, '')}
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleAddBlankNote}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E8E6E2] bg-white hover:bg-[#FCFBF9] text-xs font-medium text-[#121827] cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5 text-[#606B7C]" />
+                  <span>Add Note</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E8E6E2] bg-white hover:bg-[#FCFBF9] text-xs font-medium text-[#121827] cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5 text-[#606B7C]" />
+                  <span>Print</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isLoadingNotes}
+                  onClick={() => void handleGenerateStickyAndFlashcards(true)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg lm-btn-accent text-xs font-semibold cursor-pointer disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingNotes ? 'animate-spin' : ''}`} />
+                  <span>Regenerate</span>
+                </button>
+              </div>
+            </div>
+
+            {isLoadingNotes ? (
+              <div className="py-16 text-center space-y-3">
+                <Loader2 className="w-7 h-7 animate-spin text-[#C84428] mx-auto" />
+                <p className="text-sm font-medium text-[#121827]">
+                  Distilling concise sticky notes from {activeDocument.title}...
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 print-sheet">
+                {stickyNotes.map((note, idx) => {
+                  const colorClass =
+                    note.color === 'pink'
+                      ? 'lm-sticky-pink'
+                      : note.color === 'blue'
+                      ? 'lm-sticky-blue'
+                      : note.color === 'green'
+                      ? 'lm-sticky-green'
+                      : 'lm-sticky-yellow';
+                  const isEditing = editingNoteId === note.id;
+                  const showVennIllustration =
+                    idx === 5 || note.title.toLowerCase().includes('venn');
+
+                  return (
+                    <div
+                      key={note.id}
+                      data-testid="sticky-note-card"
+                      className={`rounded-xl border p-5 transition-transform hover:-translate-y-0.5 flex flex-col justify-between min-h-[215px] ${colorClass}`}
+                    >
+                      {isEditing ? (
+                        <div className="space-y-2">
+                          <input
+                            type="text"
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            placeholder="Short title"
+                            className="w-full px-2.5 py-1 rounded-lg bg-white/80 border border-black/15 text-sm font-bold text-[#121827]"
+                          />
+                          <textarea
+                            rows={3}
+                            value={editContent}
+                            onChange={(e) => setEditContent(e.target.value)}
+                            placeholder="10-30 words concise note"
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-white/80 border border-black/15 text-sm text-[#121827]"
+                          />
+                          <input
+                            type="text"
+                            value={editFormula}
+                            onChange={(e) => setEditFormula(e.target.value)}
+                            placeholder="Optional formula (e.g. P(A|B) = P(A∩B)/P(B))"
+                            className="w-full px-2.5 py-1 rounded-lg bg-white/80 border border-black/15 text-xs text-[#121827]"
+                          />
+                          <div className="flex justify-end gap-1.5 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => setEditingNoteId(null)}
+                              className="px-2.5 py-1 rounded-md bg-white/70 text-xs font-semibold text-[#606B7C] cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditNote(note.id)}
+                              className="px-2.5 py-1 rounded-md lm-btn-accent text-xs font-semibold cursor-pointer"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="space-y-2.5">
+                            <div className="flex items-start justify-between gap-2">
+                              <h3 className="lm-sticky-font text-xl font-bold leading-snug text-[#121827]">
+                                {note.title}
+                              </h3>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onNavigateToCitation(note.sourcePage, note.content)
+                                }
+                                className="px-2 py-0.5 rounded bg-black/5 hover:bg-black/10 text-[11px] font-medium text-[#606B7C] shrink-0 cursor-pointer"
+                                title="Jump to source in material"
+                              >
+                                {note.sourceLabel}
+                              </button>
+                            </div>
+
+                            <p className="lm-sticky-font text-[16px] leading-relaxed text-[#1F2937]">
+                              {note.content}
+                            </p>
+
+                            {showVennIllustration && (
+                              <div className="pt-1 flex justify-center">
+                                <svg viewBox="0 0 150 75" className="w-36 h-16">
+                                  <circle
+                                    cx="58"
+                                    cy="38"
+                                    r="25"
+                                    fill="rgba(59, 130, 246, 0.14)"
+                                    stroke="#3B82F6"
+                                    strokeWidth="1.4"
+                                  />
+                                  <circle
+                                    cx="92"
+                                    cy="38"
+                                    r="25"
+                                    fill="rgba(234, 179, 8, 0.22)"
+                                    stroke="#CA8A04"
+                                    strokeWidth="1.4"
+                                  />
+                                  <text x="42" y="42" fontSize="11" fill="#1E3A8A" fontWeight="bold">
+                                    A
+                                  </text>
+                                  <text x="102" y="42" fontSize="11" fill="#854D0E" fontWeight="bold">
+                                    B
+                                  </text>
+                                  <text x="67" y="41" fontSize="9" fill="#121827" fontWeight="bold">
+                                    A∩B
+                                  </text>
+                                </svg>
+                              </div>
+                            )}
+
+                            {note.formula && (
+                              <div className="px-3 py-1.5 rounded-lg bg-white/60 border border-black/10 text-sm font-serif-editorial italic text-[#121827]">
+                                {note.formula}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="pt-3 mt-2 border-t border-black/5 flex items-center justify-between gap-1 no-print">
+                            <span className="text-[11px] text-[#606B7C]">{note.sourceLabel}</span>
+
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditNote(note)}
+                                aria-label={`Edit sticky note ${note.title}`}
+                                title="Edit Sticky Note"
+                                className="p-1.5 rounded-lg hover:bg-black/10 text-[#606B7C] hover:text-[#121827] transition-colors cursor-pointer"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyNote(note)}
+                                aria-label={`Copy sticky note ${note.title}`}
+                                title="Copy Note"
+                                className="p-1.5 rounded-lg hover:bg-black/10 text-[#606B7C] hover:text-[#121827] transition-colors cursor-pointer"
+                              >
+                                {copiedNoteId === note.id ? (
+                                  <Check className="w-3.5 h-3.5 text-[#2E7D52]" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteNote(note.id)}
+                                aria-label={`Delete sticky note ${note.title}`}
+                                title="Delete Note"
+                                className="p-1.5 rounded-lg hover:bg-black/10 text-[#606B7C] hover:text-[#121827] transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================
+          2. FLASHCARDS VIEW (Flip on Click/Keyboard, Know It / Review Again)
+         ================================================================= */}
+      {subTab === 'flashcards' && (
+        <div className="space-y-6 flex-1 flex flex-col justify-between max-w-2xl mx-auto w-full">
+          {/* Top Progress & Filter Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-xs font-semibold">
+              <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                Know it: {knowItCount}
+              </span>
+              <span className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
+                Review again: {reviewAgainCount}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setFlashcardFilter((prev) =>
+                    prev === 'all' ? 'review_again' : 'all'
+                  );
+                  setCurrentCardIdx(0);
+                  setIsCardFlipped(false);
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border cursor-pointer ${
+                  flashcardFilter === 'review_again'
+                    ? 'bg-amber-100 border-amber-300 text-amber-900'
+                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                {flashcardFilter === 'review_again'
+                  ? `Showing Review Again (${reviewAgainCount})`
+                  : 'Filter: Review Again'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleShuffleFlashcards}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+              >
+                <Shuffle className="w-3.5 h-3.5" />
+                <span>Shuffle</span>
+              </button>
+            </div>
+          </div>
+
+          {isLoadingNotes ? (
+            <div className="py-16 text-center space-y-3">
+              <Loader2 className="w-7 h-7 animate-spin text-[#4285F4] mx-auto" />
+              <p className="text-sm font-medium text-slate-700">
+                Preparing active-recall flashcards...
+              </p>
+            </div>
+          ) : !activeFlashcard ? (
+            <div className="p-8 rounded-2xl bg-[#F8FAFC] border border-slate-200 text-center space-y-3">
+              <CheckCircle2 className="w-8 h-8 text-[#34A853] mx-auto" />
+              <h3 className="text-base font-bold text-[#172033]">
+                No cards in &ldquo;Review again&rdquo;
+              </h3>
+              <p className="text-xs text-[#64748B]">
+                All flashcards are marked as known or unreviewed.
+              </p>
+              <button
+                type="button"
+                onClick={() => setFlashcardFilter('all')}
+                className="px-4 py-2 rounded-full bg-[#1A73E8] text-white text-xs font-semibold cursor-pointer"
+              >
+                Show All Flashcards ({flashcards.length})
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Interactive Flip Card */}
+              <div
+                role="button"
+                tabIndex={0}
+                data-testid="flashcard-interactive"
+                aria-label={
+                  isCardFlipped
+                    ? `Flashcard Answer: ${activeFlashcard.backAnswer}. Click or press Space to flip.`
+                    : `Flashcard Question: ${activeFlashcard.frontQuestion}. Click or press Space to flip.`
+                }
+                onClick={() => setIsCardFlipped((f) => !f)}
+                onKeyDown={(e) => {
+                  if (e.key === ' ' || e.key === 'Enter') {
+                    e.preventDefault();
+                    setIsCardFlipped((f) => !f);
+                  }
+                }}
+                className={`relative rounded-3xl border-2 p-7 sm:p-9 min-h-[250px] flex flex-col justify-between transition-all cursor-pointer select-none shadow-sm ${
+                  isCardFlipped
+                    ? 'bg-[#F2FBF6] border-[#34A853]/50'
+                    : 'bg-[#F8FAFF] border-[#4285F4]/40 hover:border-[#4285F4]'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider text-[11px] ${
+                      isCardFlipped
+                        ? 'bg-[#34A853] text-white'
+                        : 'bg-[#4285F4] text-white'
+                    }`}
+                  >
+                    {isCardFlipped ? 'Back · Explanation' : 'Front · Question'}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500 font-medium">
+                      {activeFlashcard.topic}
+                    </span>
+                    {activeFlashcard.intervalDays !== undefined && (
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 font-semibold text-[11px]">
+                        SM-2: {activeFlashcard.intervalDays}d interval
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onNavigateToCitation(
+                          activeFlashcard.sourcePage,
+                          activeFlashcard.backAnswer
+                        );
+                      }}
+                      className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-[#1A73E8] font-semibold hover:underline cursor-pointer"
+                    >
+                      {activeFlashcard.sourceLabel}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="my-6 text-center px-2">
+                  <p className="text-lg sm:text-xl font-semibold text-[#172033] leading-relaxed">
+                    {isCardFlipped
+                      ? activeFlashcard.backAnswer
+                      : activeFlashcard.frontQuestion}
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-[#64748B]">
+                  <span className="tabular-nums font-semibold">
+                    Card {currentCardIdx + 1} of {visibleFlashcards.length}
+                  </span>
+                  <span className="inline-flex items-center gap-1 font-medium text-[#1A73E8]">
+                    <RotateCw className="w-3.5 h-3.5" />
+                    <span>Click or press Space to flip</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Self-Check & Navigation Controls */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <button
+                  type="button"
+                  disabled={currentCardIdx === 0}
+                  onClick={() => {
+                    setCurrentCardIdx((i) => Math.max(0, i - 1));
+                    setIsCardFlipped(false);
+                  }}
+                  className="inline-flex items-center gap-1 px-4 py-2 rounded-full border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span>Previous</span>
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleMarkFlashcard('review_again')}
+                    className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold transition-colors cursor-pointer ${
+                      activeFlashcard.status === 'review_again'
+                        ? 'bg-[#FBBC05] text-[#172033]'
+                        : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200'
+                    }`}
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Review again</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleMarkFlashcard('know_it')}
+                    className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold transition-colors cursor-pointer ${
+                      activeFlashcard.status === 'know_it'
+                        ? 'bg-[#34A853] text-white'
+                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Know it</span>
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={currentCardIdx >= visibleFlashcards.length - 1}
+                  onClick={() => {
+                    setCurrentCardIdx((i) =>
+                      Math.min(visibleFlashcards.length - 1, i + 1)
+                    );
+                    setIsCardFlipped(false);
+                  }}
+                  className="inline-flex items-center gap-1 px-4 py-2 rounded-full border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+                >
+                  <span>Next</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* =================================================================
+          3. INTERACTIVE MIND MAP VIEW (SVG Radial Layout + Node Inspector)
+         ================================================================= */}
+      {subTab === 'mindmap' && (
+        <div className="space-y-4 flex-1 flex flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-2 no-print">
+            <span className="text-xs font-medium text-[#64748B]">
+              Click any concept node to view its explanation and source reference.
+            </span>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.max(0.65, Number((z - 0.15).toFixed(2))))}
+                aria-label="Zoom out mind map"
+                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 cursor-pointer"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </button>
+              <span className="text-xs font-semibold tabular-nums px-1.5">
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.min(1.6, Number((z + 0.15).toFixed(2))))}
+                aria-label="Zoom in mind map"
+                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 cursor-pointer"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setZoom(1);
+                  setPan({ x: 0, y: 0 });
+                }}
+                aria-label="Reset mind map view"
+                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 cursor-pointer"
+              >
+                <Maximize className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadMindMapSvg}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export SVG</span>
+              </button>
+              <button
+                type="button"
+                disabled={isLoadingMindMap}
+                onClick={() => void handleGenerateMindMapAndRevision(true)}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-[#1A73E8] text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingMindMap ? 'animate-spin' : ''}`} />
+                <span>Regenerate</span>
+              </button>
+            </div>
+          </div>
+
+          {isLoadingMindMap || !mindMap ? (
+            <div className="py-16 text-center space-y-3">
+              <Loader2 className="w-7 h-7 animate-spin text-[#34A853] mx-auto" />
+              <p className="text-sm font-medium text-slate-700">
+                Mapping grounded concept relationships from {activeDocument.title}...
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
+              {/* Interactive SVG Canvas */}
+              <div className="xl:col-span-8 rounded-2xl bg-[#F8FAFC] border border-slate-200/90 overflow-hidden relative min-h-[420px] flex items-center justify-center">
+                {(() => {
+                  const width = 980;
+                  const height = 560;
+                  const cx = width / 2;
+                  const cy = height / 2;
+
+                  const centralNode =
+                    mindMap.nodes.find((n) => n.level === 'central') || mindMap.nodes[0];
+                  const branches = mindMap.nodes.filter((n) => n.level === 'branch');
+                  const subtopics = mindMap.nodes.filter((n) => n.level === 'subtopic');
+
+                  const posMap = new Map<string, { x: number; y: number }>();
+                  if (centralNode) {
+                    posMap.set(centralNode.id, { x: cx, y: cy });
+                  }
+
+                  branches.forEach((b, idx) => {
+                    const angle =
+                      (idx / Math.max(1, branches.length)) * Math.PI * 2 - Math.PI / 2;
+                    const rx = 200;
+                    const ry = 120;
+                    const bx = cx + Math.cos(angle) * rx;
+                    const by = cy + Math.sin(angle) * ry;
+                    posMap.set(b.id, { x: bx, y: by });
+
+                    const children = subtopics.filter((s) => s.parentId === b.id);
+                    children.forEach((child, cIdx) => {
+                      const cosA = Math.cos(angle);
+                      const sinA = Math.sin(angle);
+                      let sx = bx;
+                      let sy = by;
+                      if (Math.abs(cosA) > 0.5) {
+                        sx = bx + Math.sign(cosA) * 185;
+                        sy = by + (cIdx - (children.length - 1) / 2) * 52;
+                      } else {
+                        sx = bx + (cIdx - (children.length - 1) / 2) * 175;
+                        sy = by + Math.sign(sinA) * 92;
+                      }
+                      posMap.set(child.id, {
+                        x: Math.max(85, Math.min(width - 85, sx)),
+                        y: Math.max(42, Math.min(height - 42, sy)),
+                      });
+                    });
+                  });
+
+                  const colorPalette = {
+                    blue: { stroke: '#4285F4', fill: '#E8F0FE', text: '#172033' },
+                    red: { stroke: '#EA4335', fill: '#FCE8E6', text: '#172033' },
+                    yellow: { stroke: '#D97706', fill: '#FEF7E0', text: '#172033' },
+                    green: { stroke: '#34A853', fill: '#E6F4EA', text: '#172033' },
+                  };
+
+                  return (
+                    <svg
+                      id="learnmate-mindmap-svg"
+                      viewBox={`0 0 ${width} ${height}`}
+                      className="w-full h-[440px] select-none"
+                    >
+                      <g
+                        transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}
+                        style={{ transformOrigin: 'center' }}
+                      >
+                        {/* Edges */}
+                        {mindMap.edges.map((edge, eIdx) => {
+                          const p1 = posMap.get(edge.from);
+                          const p2 = posMap.get(edge.to);
+                          if (!p1 || !p2) return null;
+                          const targetNode = mindMap.nodes.find((n) => n.id === edge.to);
+                          const strokeColor =
+                            colorPalette[targetNode?.color || 'blue'].stroke;
+                          const midX = (p1.x + p2.x) / 2;
+                          return (
+                            <path
+                              key={eIdx}
+                              d={`M ${p1.x} ${p1.y} C ${midX} ${p1.y}, ${midX} ${p2.y}, ${p2.x} ${p2.y}`}
+                              fill="none"
+                              stroke={strokeColor}
+                              strokeWidth={targetNode?.level === 'branch' ? 2.5 : 1.75}
+                              strokeOpacity={0.7}
+                            />
+                          );
+                        })}
+
+                        {/* Nodes */}
+                        {mindMap.nodes.map((node) => {
+                          const pos = posMap.get(node.id);
+                          if (!pos) return null;
+                          const theme = colorPalette[node.color || 'blue'];
+                          const isSelected = selectedNode?.id === node.id;
+                          const boxWidth =
+                            node.level === 'central'
+                              ? 176
+                              : node.level === 'branch'
+                              ? 152
+                              : 132;
+                          const boxHeight = node.level === 'central' ? 46 : 36;
+
+                          return (
+                            <g
+                              key={node.id}
+                              transform={`translate(${pos.x - boxWidth / 2}, ${
+                                pos.y - boxHeight / 2
+                              })`}
+                              onClick={() => setSelectedNode(node)}
+                              className="cursor-pointer"
+                            >
+                              <rect
+                                width={boxWidth}
+                                height={boxHeight}
+                                rx={12}
+                                fill={node.level === 'central' ? '#1A73E8' : theme.fill}
+                                stroke={isSelected ? '#172033' : theme.stroke}
+                                strokeWidth={isSelected ? 2.8 : 1.8}
+                              />
+                              <text
+                                x={boxWidth / 2}
+                                y={boxHeight / 2 + 4}
+                                textAnchor="middle"
+                                fill={node.level === 'central' ? '#FFFFFF' : theme.text}
+                                fontSize={node.level === 'central' ? 12.5 : 11}
+                                fontWeight={node.level === 'subtopic' ? 600 : 700}
+                              >
+                                {node.label.length > 22
+                                  ? `${node.label.slice(0, 20)}…`
+                                  : node.label}
+                              </text>
+                            </g>
+                          );
+                        })}
+                      </g>
+                    </svg>
+                  );
+                })()}
+              </div>
+
+              {/* Selected Node Explanation Inspector */}
+              <div className="xl:col-span-4 rounded-2xl bg-white border border-slate-200/90 p-5 space-y-3.5 shadow-2xs">
+                {selectedNode ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-[#1A73E8] bg-[#E8F0FE] px-2.5 py-0.5 rounded-full">
+                        {selectedNode.level === 'central'
+                          ? 'Central Topic'
+                          : selectedNode.level === 'branch'
+                          ? 'Main Concept Branch'
+                          : 'Subtopic Detail'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onNavigateToCitation(
+                            selectedNode.sourcePage,
+                            selectedNode.label
+                          )
+                        }
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#F8FAFC] border border-slate-200 text-xs font-semibold text-[#1A73E8] hover:bg-[#E8F0FE] cursor-pointer"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>{selectedNode.sourceLabel}</span>
+                      </button>
+                    </div>
+
+                    <h3 className="text-base font-bold text-[#172033]">
+                      {selectedNode.label}
+                    </h3>
+
+                    <p className="text-sm text-slate-600 leading-relaxed">
+                      {selectedNode.explanation}
+                    </p>
+
+                    {onAskTutorAboutConcept && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onAskTutorAboutConcept(
+                            `Explain "${selectedNode.label}" (${selectedNode.sourceLabel}) and how it connects to the rest of ${activeDocument.title}.`
+                          )
+                        }
+                        className="w-full py-2 px-3 rounded-xl bg-[#E8F0FE] hover:bg-[#D2E3FC] text-[#1A73E8] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Ask AI Tutor about this node</span>
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-[#64748B]">
+                    Select any node in the mind map to inspect its grounded explanation and source page/timestamp.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =================================================================
+          4. ONE-PAGE REVISION SHEET (Print-Optimized A4 Summary)
+         ================================================================= */}
+      {subTab === 'onepage' && (
+        <div className="space-y-4 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2 no-print">
+            <span className="text-xs font-medium text-[#64748B]">
+              Multi-page formatted PDF revision sheet &amp; A4 print-ready study summary.
+            </span>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleOpenPreviewModal}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+              >
+                <Eye className="w-3.5 h-3.5 text-[#4285F4]" />
+                <span>Preview Formatted Notes</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Print Notes</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadOnePageRevisionTxt}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Download as TXT</span>
+              </button>
+              <button
+                type="button"
+                data-testid="onepage-download-pdf-btn"
+                disabled={isGeneratingPdf}
+                onClick={() => void handleDownloadRevisionPdf()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1A73E8] hover:bg-[#1557B0] text-white text-xs font-bold shadow-2xs cursor-pointer disabled:opacity-60"
+              >
+                <FileDown className="w-3.5 h-3.5" />
+                <span>{isGeneratingPdf ? 'Generating PDF...' : 'Download PDF'}</span>
+              </button>
+            </div>
+          </div>
+
+          {isLoadingMindMap || !onePageRevision ? (
+            <div className="py-16 text-center space-y-3">
+              <Loader2 className="w-7 h-7 animate-spin text-[#EA4335] mx-auto" />
+              <p className="text-sm font-medium text-slate-700">
+                Compiling one-page revision sheet for {activeDocument.title}...
+              </p>
+            </div>
+          ) : (
+            <div
+              data-testid="one-page-revision-sheet"
+              className="print-sheet bg-white rounded-2xl border border-slate-200/90 p-6 sm:p-8 space-y-6 shadow-xs"
+            >
+              {/* Sheet Header */}
+              <div className="border-b border-slate-200 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-[#1A73E8]">
+                    LearnMate One-Page Revision Sheet
+                  </span>
+                  <h3 className="text-xl font-bold text-[#172033] mt-0.5">
+                    {onePageRevision.chapterTitle}
+                  </h3>
+                  <p className="text-xs text-[#64748B] mt-1 max-w-3xl">
+                    {onePageRevision.overview}
+                  </p>
+                </div>
+              </div>
+
+              {/* 2-Column Essential Concepts & Formulas */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Essential Concepts */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-[#172033] border-l-4 border-[#4285F4] pl-2.5">
+                    Essential Concepts
+                  </h4>
+                  <div className="space-y-2.5">
+                    {onePageRevision.essentialConcepts.map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-xl bg-[#F8FAFC] border border-slate-200/80 space-y-1"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-[#172033]">
+                            {item.title}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onNavigateToCitation(item.sourcePage, item.title)
+                            }
+                            className="text-[11px] font-semibold text-[#1A73E8] hover:underline cursor-pointer"
+                          >
+                            {item.sourceLabel}
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-600 leading-relaxed">
+                          {item.summary}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Key Formulas & Definitions */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-[#172033] border-l-4 border-[#34A853] pl-2.5">
+                    Important Formulas & Definitions
+                  </h4>
+                  <div className="space-y-2.5">
+                    {onePageRevision.formulasAndDefinitions.map((f, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-xl bg-[#F2FBF6] border border-emerald-100 space-y-1"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-[#172033]">
+                            {f.term}
+                          </span>
+                          <span className="text-[11px] font-semibold text-emerald-800">
+                            {f.sourceLabel}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-700 lm-math-expr leading-relaxed">
+                          {f.formulaOrDef}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Key Relationships & Common Mistakes */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="space-y-2.5">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-[#172033] border-l-4 border-[#FBBC05] pl-2.5">
+                    Key Concept Relationships
+                  </h4>
+                  <ul className="space-y-1.5 text-xs text-slate-700 list-disc pl-4">
+                    {onePageRevision.keyRelationships.map((rel, idx) => (
+                      <li key={idx} className="leading-relaxed">
+                        {rel}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="space-y-2.5">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-[#172033] border-l-4 border-[#EA4335] pl-2.5">
+                    Common Mistakes to Avoid
+                  </h4>
+                  <ul className="space-y-1.5 text-xs text-slate-700 list-disc pl-4">
+                    {onePageRevision.commonMistakesToAvoid.map((mistake, idx) => (
+                      <li key={idx} className="leading-relaxed">
+                        {mistake}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              {/* Short Self-Check Recall Questions */}
+              <div className="space-y-2.5 pt-2 border-t border-slate-100">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#172033]">
+                  Quick Recall Questions
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {onePageRevision.quickRecallQuestions.map((q, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3 rounded-xl bg-[#F8FAFC] border border-slate-200/80 space-y-1 text-xs"
+                    >
+                      <p className="font-bold text-[#172033]">
+                        Q{idx + 1}: {q.question}
+                      </p>
+                      <p className="text-slate-600 leading-relaxed">
+                        <strong className="text-emerald-700">Answer:</strong> {q.shortAnswer}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =================================================================
+          5. PREVIEW REVISION NOTES MODAL BEFORE PDF DOWNLOAD
+         ================================================================= */}
+      {previewModalOpen && onePageRevision && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Revision Notes PDF Preview"
+          data-testid="revision-pdf-preview-modal"
+          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPreviewModalOpen(false);
+          }}
+        >
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-4xl w-full max-h-[88vh] flex flex-col overflow-hidden">
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-[#F8FAFC] border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-[#1A73E8]">
+                  PDF Document Preview • {buildRevisionPdfFilename(activeDocument.title)}
+                </span>
+                <h3 className="text-base font-bold text-[#172033]">
+                  {onePageRevision.chapterTitle}
+                </h3>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isGeneratingPdf}
+                  onClick={() => void handleDownloadRevisionPdf()}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-[#1A73E8] hover:bg-[#1557B0] text-white text-xs font-bold cursor-pointer"
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  <span>{isGeneratingPdf ? 'Generating...' : 'Download .PDF Now'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewModalOpen(false)}
+                  aria-label="Close PDF preview"
+                  className="p-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Simulated Multi-Page A4 Preview Body */}
+            <div className="p-6 overflow-y-auto space-y-6 bg-slate-100/70 flex-1">
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-6 sm:p-8 shadow-sm max-w-3xl mx-auto space-y-5">
+                <div className="p-4 rounded-xl bg-[#E8F0FE]/70 border border-[#4285F4]/30">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-[#1A73E8]">
+                    LEARNMATE STRUCTURED REVISION NOTES
+                  </div>
+                  <div className="text-lg font-bold text-[#172033] mt-0.5">
+                    {onePageRevision.chapterTitle}
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1">
+                    {onePageRevision.overview}
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-[#1A73E8]">
+                    1. Essential Concepts ({onePageRevision.essentialConcepts.length})
+                  </h4>
+                  <div className="space-y-2">
+                    {onePageRevision.essentialConcepts.map((c, idx) => (
+                      <div key={idx} className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-xs">
+                        <div className="font-bold text-[#172033]">
+                          {idx + 1}. {c.title} <span className="text-[#1A73E8]">[{c.sourceLabel}]</span>
+                        </div>
+                        <p className="text-slate-600 mt-0.5">{c.summary}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-[#137333]">
+                    2. Key Formulas &amp; Definitions ({onePageRevision.formulasAndDefinitions.length})
+                  </h4>
+                  <div className="divide-y divide-emerald-100 rounded-xl border border-emerald-200/80 bg-[#F2FBF6] overflow-hidden text-xs">
+                    {onePageRevision.formulasAndDefinitions.map((f, idx) => (
+                      <div key={idx} className="p-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div className="font-bold text-emerald-900">
+                          {f.term} <span className="text-[11px] font-normal">({f.sourceLabel})</span>
+                        </div>
+                        <div className="sm:col-span-2 font-mono text-slate-800">
+                          {f.formulaOrDef}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {stickyNotes.length > 0 && (
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-[#D97706]">
+                      3. Highlighted Sticky Notes ({stickyNotes.length})
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                      {stickyNotes.map((n) => (
+                        <div key={n.id} className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/80">
+                          <div className="font-bold text-[#172033]">{n.title}</div>
+                          <p className="text-slate-700 mt-0.5">{n.content}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
